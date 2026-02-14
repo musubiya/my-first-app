@@ -7,6 +7,7 @@ import RevenueChart from "@/components/RevenueChart";
 import SentimentChart from "@/components/SentimentChart";
 import NewsList from "@/components/NewsList";
 import LoadingSpinner from "@/components/LoadingSpinner";
+import DataSourceBadge from "@/components/DataSourceBadge";
 import type { ResearchResult } from "@/lib/types";
 
 export default function Home() {
@@ -76,7 +77,7 @@ export default function Home() {
             企業のURLを入力して分析
           </h2>
           <p className="text-gray-500 mb-6">
-            企業のWebサイトURLから、業績・評判・ニュースを自動で分析します
+            Yahoo Finance・Google Newsの実データ + AI分析で企業を多角的にリサーチ
           </p>
           <div className="flex justify-center">
             <SearchForm onSearch={handleSearch} isLoading={isLoading} />
@@ -96,6 +97,11 @@ export default function Home() {
         {/* 結果表示 */}
         {result && (
           <div className="space-y-6">
+            {/* データソース表示 */}
+            {result.dataSources && (
+              <DataSourceBadge dataSources={result.dataSources} />
+            )}
+
             {/* 企業概要 */}
             <CompanyOverview
               company={result.company}
@@ -104,7 +110,18 @@ export default function Home() {
 
             {/* グラフセクション */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <RevenueChart data={result.financials} />
+              {result.financials.length > 0 ? (
+                <RevenueChart data={result.financials} />
+              ) : (
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-4">
+                    業績推移
+                  </h3>
+                  <p className="text-sm text-gray-400">
+                    この企業の財務データは取得できませんでした（非上場企業の可能性があります）
+                  </p>
+                </div>
+              )}
               <SentimentChart data={result.sentiment} />
             </div>
 

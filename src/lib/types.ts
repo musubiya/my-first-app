@@ -8,6 +8,9 @@ export interface CompanyInfo {
   founded: string;
   headquarters: string;
   employeeCount: string;
+  ticker?: string;
+  marketCap?: number | null;
+  currentPrice?: number | null;
 }
 
 export interface FinancialData {
@@ -30,6 +33,15 @@ export interface NewsItem {
   date: string;
   sentiment: "positive" | "neutral" | "negative";
   summary: string;
+  url?: string;
+}
+
+/** データがどこから取得されたかを示す */
+export interface DataSources {
+  financials: "yahoo-finance" | "ai-estimate" | "demo";
+  news: "google-news" | "ai-generated" | "demo";
+  company: "ai-analysis" | "page-scraping";
+  sentiment: "ai-analysis" | "demo";
 }
 
 export interface ResearchResult {
@@ -39,4 +51,5 @@ export interface ResearchResult {
   news: NewsItem[];
   overallScore: number;  // 総合スコア (0-100)
   analyzedAt: string;
+  dataSources: DataSources;
 }

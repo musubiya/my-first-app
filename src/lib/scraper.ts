@@ -1,22 +1,27 @@
 import * as cheerio from "cheerio";
 import { analyzeWithAI } from "./analyzer";
+import { fetchRealFinancials } from "./finance";
+import { fetchRealNews } from "./news";
 import type {
   ResearchResult,
   CompanyInfo,
   FinancialData,
   SentimentData,
   NewsItem,
+  DataSources,
 } from "./types";
 
-/**
- * URLからWebページの内容を取得してパースする
- */
-async function fetchPageContent(url: string): Promise<{
+// --- Webページ取得 ---
+
+interface PageContent {
+  url: string;
   title: string;
   description: string;
   bodyText: string;
   ogData: Record<string, string>;
-}> {
+}
+
+async function fetchPageContent(url: string): Promise<PageContent> {
   const response = await fetch(url, {
     headers: {
       "User-Agent":
@@ -48,19 +53,90 @@ async function fetchPageContent(url: string): Promise<{
   $("script, style, nav, footer, header, iframe, noscript").remove();
   const bodyText = $("body").text().replace(/\s+/g, " ").trim().slice(0, 5000);
 
-  return { title, description, bodyText, ogData };
+  return { url, title, description, bodyText, ogData };
+}
+
+/**
+ * 同一ドメインの内部リンクを収集し、追加ページを取得する
+ */
+async function fetchMultiplePages(
+  baseUrl: string,
+  mainPage: PageContent,
+  maxPages = 3
+): Promise<PageContent[]> {
+  const pages: PageContent[] = [mainPage];
+
+  try {
+    const baseHost = new URL(baseUrl).hostname;
+
+    // メインページからリンクを抽出
+    const response = await fetch(baseUrl, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; CompanyResearchBot/1.0)" },
+      signal: AbortSignal.timeout(10000),
+    });
+    const html = await response.text();
+    const $ = cheerio.load(html);
+
+    // 会社情報系のページを優先的に取得
+    const priorityPatterns = [
+      /about|company|corporate|会社概要|企業情報|profile/i,
+      /ir|investor|finance|業績|財務/i,
+      /service|product|事業内容|サービス/i,
+    ];
+
+    const links: string[] = [];
+    $("a[href]").each((_, el) => {
+      const href = $(el).attr("href");
+      if (!href) return;
+
+      try {
+        const fullUrl = new URL(href, baseUrl);
+        if (
+          fullUrl.hostname === baseHost &&
+          fullUrl.pathname !== new URL(baseUrl).pathname &&
+          !fullUrl.pathname.match(/\.(pdf|jpg|png|gif|svg|css|js|zip)$/i)
+        ) {
+          links.push(fullUrl.toString());
+        }
+      } catch {
+        // 無効なURLは無視
+      }
+    });
+
+    // 優先度順にソート
+    const sortedLinks = links
+      .filter((v, i, a) => a.indexOf(v) === i) // 重複除去
+      .sort((a, b) => {
+        const aScore = priorityPatterns.findIndex((p) => p.test(a));
+        const bScore = priorityPatterns.findIndex((p) => p.test(b));
+        return (aScore === -1 ? 99 : aScore) - (bScore === -1 ? 99 : bScore);
+      });
+
+    // 上位ページを並行取得
+    const fetches = sortedLinks.slice(0, maxPages).map(async (url) => {
+      try {
+        return await fetchPageContent(url);
+      } catch {
+        return null;
+      }
+    });
+
+    const results = await Promise.all(fetches);
+    for (const page of results) {
+      if (page) pages.push(page);
+    }
+  } catch (error) {
+    console.error("Multi-page crawl error:", error);
+  }
+
+  return pages;
 }
 
 // --- フォールバック用のローカル解析関数群 ---
 
 function extractCompanyInfo(
   url: string,
-  pageData: {
-    title: string;
-    description: string;
-    bodyText: string;
-    ogData: Record<string, string>;
-  }
+  pageData: PageContent
 ): CompanyInfo {
   const siteName = pageData.ogData["site_name"] || "";
   const name =
@@ -110,28 +186,6 @@ function detectIndustry(text: string): string {
   return "その他";
 }
 
-function generateFinancialData(companyName: string): FinancialData[] {
-  const seed = companyName.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
-  const baseRevenue = 100 + (seed % 900);
-  const growthRate = 0.03 + (seed % 15) / 100;
-
-  return Array.from({ length: 5 }, (_, i) => {
-    const year = (2021 + i).toString();
-    const yearMultiplier = Math.pow(1 + growthRate, i);
-    const fluctuation = 1 + (Math.sin(seed + i * 2) * 0.08);
-    const revenue = Math.round(baseRevenue * yearMultiplier * fluctuation);
-    const opMargin = 0.08 + (Math.sin(seed + i) * 0.04);
-    const netMargin = opMargin * 0.6;
-
-    return {
-      year,
-      revenue,
-      operatingIncome: Math.round(revenue * opMargin),
-      netIncome: Math.round(revenue * netMargin),
-    };
-  });
-}
-
 function generateSentimentData(companyName: string): SentimentData[] {
   const seed = companyName.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
   const categories = [
@@ -152,94 +206,124 @@ function generateSentimentData(companyName: string): SentimentData[] {
   });
 }
 
-function generateNewsData(companyName: string): NewsItem[] {
-  const templates: Array<{
-    title: (name: string) => string;
-    source: string;
-    sentiment: NewsItem["sentiment"];
-    summary: (name: string) => string;
-  }> = [
-    {
-      title: (n) => `${n}、新規事業で売上拡大へ`,
-      source: "日経ビジネス",
-      sentiment: "positive",
-      summary: (n) => `${n}は新規事業領域への投資を加速し、来期の売上成長を見込んでいる。`,
-    },
-    {
-      title: (n) => `${n}の四半期決算、市場予想を上回る`,
-      source: "Bloomberg",
-      sentiment: "positive",
-      summary: (n) => `${n}の直近四半期決算はアナリスト予想を上回り、株価は上昇した。`,
-    },
-    {
-      title: (n) => `${n}、業界再編の動きに注目`,
-      source: "東洋経済オンライン",
-      sentiment: "neutral",
-      summary: (n) => `業界再編の動きが加速する中、${n}の今後の戦略が注目されている。`,
-    },
-    {
-      title: (n) => `${n}のDX戦略、課題と展望`,
-      source: "ITmedia",
-      sentiment: "neutral",
-      summary: (n) => `${n}が推進するDX戦略について、専門家が課題と今後の展望を分析。`,
-    },
-    {
-      title: (n) => `${n}、人材確保が今後の課題に`,
-      source: "ダイヤモンド・オンライン",
-      sentiment: "negative",
-      summary: (n) => `${n}では優秀な人材の確保が経営課題として浮上している。`,
-    },
-  ];
-
-  const now = new Date();
-  return templates.map((t, i) => ({
-    title: t.title(companyName),
-    source: t.source,
-    date: new Date(now.getTime() - i * 7 * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .split("T")[0],
-    sentiment: t.sentiment,
-    summary: t.summary(companyName),
+/**
+ * 実際のニュースデータをNewsItem形式に変換する
+ */
+function convertRealNewsToNewsItems(
+  realNews: { title: string; url: string; source: string; date: string; snippet: string }[]
+): NewsItem[] {
+  return realNews.slice(0, 5).map((item) => ({
+    title: item.title,
+    source: item.source,
+    date: item.date,
+    sentiment: "neutral" as const, // AI がない場合は全て中立
+    summary: item.snippet || item.title,
+    url: item.url,
   }));
 }
 
 /**
  * メインのリサーチ関数
- * ANTHROPIC_API_KEY が設定されていれば Claude AI で高精度解析、
- * 未設定ならローカルのフォールバック解析を使用する
+ * 1. 複数ページをクロール
+ * 2. Yahoo Finance から実際の財務データを取得
+ * 3. Google News RSS から実際のニュースを取得
+ * 4. AI があれば全データを統合分析、なければ実データをそのまま表示
  */
 export async function researchCompany(url: string): Promise<ResearchResult> {
-  // 1. Webページの取得・パース
-  const pageData = await fetchPageContent(url);
+  // 1. メインページ取得
+  const mainPage = await fetchPageContent(url);
+
+  // 企業名を早期に抽出（並行処理用）
+  const siteName = mainPage.ogData["site_name"] || "";
+  const companyName =
+    siteName ||
+    mainPage.title.split(/[|\-–—]/)[0].trim() ||
+    new URL(url).hostname.replace("www.", "");
+
+  // 2. 複数ページクロール・財務データ・ニュースを並行取得
+  const [pages, realFinancials, realNews] = await Promise.all([
+    fetchMultiplePages(url, mainPage, 3),
+    fetchRealFinancials(companyName),
+    fetchRealNews(companyName, 10),
+  ]);
+
+  // 全ページのテキストを結合
+  const allPagesText = pages
+    .map((p) => `[${p.title}]\n${p.bodyText}`)
+    .join("\n\n---\n\n");
 
   const useAI = !!process.env.ANTHROPIC_API_KEY;
 
+  const dataSources: DataSources = {
+    financials: realFinancials?.yearlyData.length ? "yahoo-finance" : (useAI ? "ai-estimate" : "demo"),
+    news: realNews.length > 0 ? "google-news" : (useAI ? "ai-generated" : "demo"),
+    company: useAI ? "ai-analysis" : "page-scraping",
+    sentiment: useAI ? "ai-analysis" : "demo",
+  };
+
   if (useAI) {
-    // --- AI 解析モード ---
     try {
       const aiResult = await analyzeWithAI(
         url,
-        pageData.title,
-        pageData.description,
-        pageData.bodyText
+        mainPage.title,
+        mainPage.description,
+        allPagesText,
+        realFinancials,
+        realNews
       );
 
+      // 実際の財務データがあればAI推定より優先
+      const financials =
+        realFinancials && realFinancials.yearlyData.length > 0
+          ? realFinancials.yearlyData
+          : aiResult.financials;
+
+      // 実際のニュースがあればそちらを使用（AI でセンチメント分析済み）
+      const news = aiResult.news;
+
       return {
-        ...aiResult,
+        company: {
+          ...aiResult.company,
+          ticker: realFinancials?.ticker,
+          marketCap: realFinancials?.marketCap,
+          currentPrice: realFinancials?.currentPrice,
+        },
+        financials,
+        sentiment: aiResult.sentiment,
+        news,
+        overallScore: aiResult.overallScore,
         analyzedAt: new Date().toISOString(),
+        dataSources,
       };
     } catch (error) {
       console.error("AI 解析に失敗しました。フォールバックを使用します:", error);
-      // AI 解析失敗時はフォールバックへ
     }
   }
 
-  // --- フォールバック: ローカル解析 ---
-  const company = extractCompanyInfo(url, pageData);
-  const financials = generateFinancialData(company.name);
-  const sentiment = generateSentimentData(company.name);
-  const news = generateNewsData(company.name);
+  // --- フォールバック: 実データ + ローカル解析 ---
+  const company = extractCompanyInfo(url, mainPage);
+  if (realFinancials) {
+    company.ticker = realFinancials.ticker;
+    company.marketCap = realFinancials.marketCap;
+    company.currentPrice = realFinancials.currentPrice;
+  }
 
+  // 財務データ: Yahoo Finance の実データを優先
+  const financials =
+    realFinancials && realFinancials.yearlyData.length > 0
+      ? realFinancials.yearlyData
+      : []; // デモデータはもう使わない
+
+  // ニュース: Google News の実データを優先
+  const news =
+    realNews.length > 0
+      ? convertRealNewsToNewsItems(realNews)
+      : [];
+
+  // センチメント: AIなしではデモ表示
+  const sentiment = generateSentimentData(company.name);
+
+  // スコア計算
   const avgPositive =
     sentiment.reduce((sum, s) => sum + s.positive, 0) / sentiment.length;
   const revenueGrowth =
@@ -257,5 +341,6 @@ export async function researchCompany(url: string): Promise<ResearchResult> {
     news,
     overallScore: Math.min(100, Math.max(0, overallScore)),
     analyzedAt: new Date().toISOString(),
+    dataSources,
   };
 }

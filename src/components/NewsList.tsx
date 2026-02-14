@@ -28,6 +28,17 @@ function getSentimentBadge(sentiment: NewsItem["sentiment"]) {
 }
 
 export default function NewsList({ news }: NewsListProps) {
+  if (news.length === 0) {
+    return (
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">
+          関連ニュース
+        </h3>
+        <p className="text-sm text-gray-400">ニュースが見つかりませんでした</p>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
       <h3 className="text-lg font-semibold text-gray-800 mb-4">
@@ -44,7 +55,20 @@ export default function NewsList({ news }: NewsListProps) {
               <span className="text-xs text-gray-400">{item.source}</span>
               <span className="text-xs text-gray-400">{item.date}</span>
             </div>
-            <h4 className="text-sm font-medium text-gray-800">{item.title}</h4>
+            {item.url ? (
+              <a
+                href={item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm font-medium text-blue-700 hover:underline"
+              >
+                {item.title}
+              </a>
+            ) : (
+              <h4 className="text-sm font-medium text-gray-800">
+                {item.title}
+              </h4>
+            )}
             <p className="text-xs text-gray-500 mt-1">{item.summary}</p>
           </div>
         ))}
