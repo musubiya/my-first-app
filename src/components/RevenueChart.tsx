@@ -248,9 +248,12 @@ export default function RevenueChart({ data }: RevenueChartProps) {
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-      <h3 className="text-lg font-semibold text-gray-800 mb-4">
+      <h3 className="text-lg font-semibold text-gray-800 mb-1">
         業績推移（過去5年）
       </h3>
+      <p className="text-sm text-gray-400 mb-4">
+        売上高・営業利益・純利益の推移を表示しています。棒グラフが売上高、折れ線が利益です。
+      </p>
       <div className="relative">
         <svg ref={svgRef} className="w-full" />
       </div>
