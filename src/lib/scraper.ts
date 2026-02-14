@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { analyzeWithAI } from "./analyzer";
 import type {
   ResearchResult,
   CompanyInfo,
@@ -31,14 +32,12 @@ async function fetchPageContent(url: string): Promise<{
   const html = await response.text();
   const $ = cheerio.load(html);
 
-  // メタ情報の抽出
   const title = $("title").text().trim();
   const description =
     $('meta[name="description"]').attr("content") ||
     $('meta[property="og:description"]').attr("content") ||
     "";
 
-  // OGP情報
   const ogData: Record<string, string> = {};
   $('meta[property^="og:"]').each((_, el) => {
     const prop = $(el).attr("property")?.replace("og:", "") || "";
@@ -46,18 +45,14 @@ async function fetchPageContent(url: string): Promise<{
     if (prop && content) ogData[prop] = content;
   });
 
-  // 不要なタグを除去してテキスト取得
   $("script, style, nav, footer, header, iframe, noscript").remove();
   const bodyText = $("body").text().replace(/\s+/g, " ").trim().slice(0, 5000);
 
   return { title, description, bodyText, ogData };
 }
 
-/**
- * 取得したWebページ情報から企業情報を抽出する
- * 注: 実際のプロダクションではAI API (Claude, GPT等) を使用して
- * より高精度な情報抽出を行うことを推奨
- */
+// --- フォールバック用のローカル解析関数群 ---
+
 function extractCompanyInfo(
   url: string,
   pageData: {
@@ -92,10 +87,7 @@ function extractCompanyInfo(
   };
 }
 
-function extractPattern(
-  text: string,
-  pattern: RegExp
-): RegExpMatchArray | null {
+function extractPattern(text: string, pattern: RegExp): RegExpMatchArray | null {
   return text.match(pattern);
 }
 
@@ -118,10 +110,6 @@ function detectIndustry(text: string): string {
   return "その他";
 }
 
-/**
- * デモ用の財務データ生成
- * 注: 実際のプロダクションではYahoo Finance API、EDINET API等から取得
- */
 function generateFinancialData(companyName: string): FinancialData[] {
   const seed = companyName.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
   const baseRevenue = 100 + (seed % 900);
@@ -144,10 +132,6 @@ function generateFinancialData(companyName: string): FinancialData[] {
   });
 }
 
-/**
- * デモ用の評判データ生成
- * 注: 実際のプロダクションではGoogle Reviews API、口コミサイトAPI等から取得
- */
 function generateSentimentData(companyName: string): SentimentData[] {
   const seed = companyName.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
   const categories = [
@@ -168,9 +152,6 @@ function generateSentimentData(companyName: string): SentimentData[] {
   });
 }
 
-/**
- * デモ用のニュースデータ生成
- */
 function generateNewsData(companyName: string): NewsItem[] {
   const templates: Array<{
     title: (name: string) => string;
@@ -224,25 +205,41 @@ function generateNewsData(companyName: string): NewsItem[] {
 
 /**
  * メインのリサーチ関数
- * URLからWebページを取得し、企業情報を抽出・分析する
+ * ANTHROPIC_API_KEY が設定されていれば Claude AI で高精度解析、
+ * 未設定ならローカルのフォールバック解析を使用する
  */
 export async function researchCompany(url: string): Promise<ResearchResult> {
   // 1. Webページの取得・パース
   const pageData = await fetchPageContent(url);
 
-  // 2. 企業情報の抽出
+  const useAI = !!process.env.ANTHROPIC_API_KEY;
+
+  if (useAI) {
+    // --- AI 解析モード ---
+    try {
+      const aiResult = await analyzeWithAI(
+        url,
+        pageData.title,
+        pageData.description,
+        pageData.bodyText
+      );
+
+      return {
+        ...aiResult,
+        analyzedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      console.error("AI 解析に失敗しました。フォールバックを使用します:", error);
+      // AI 解析失敗時はフォールバックへ
+    }
+  }
+
+  // --- フォールバック: ローカル解析 ---
   const company = extractCompanyInfo(url, pageData);
-
-  // 3. 財務データの取得（デモデータ）
   const financials = generateFinancialData(company.name);
-
-  // 4. 評判データの取得（デモデータ）
   const sentiment = generateSentimentData(company.name);
-
-  // 5. ニュースデータの取得（デモデータ）
   const news = generateNewsData(company.name);
 
-  // 6. 総合スコアの算出
   const avgPositive =
     sentiment.reduce((sum, s) => sum + s.positive, 0) / sentiment.length;
   const revenueGrowth =
