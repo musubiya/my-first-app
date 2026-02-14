@@ -109,7 +109,7 @@ export default function Home() {
             />
 
             {/* グラフセクション */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="space-y-6">
               {result.financials.length > 0 ? (
                 <RevenueChart data={result.financials} />
               ) : (
